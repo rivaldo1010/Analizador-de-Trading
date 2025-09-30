@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis de Trading con IA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .pulse { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        
+        /* Estilos específicos para colores */
+        .bg-green-900 { background-color: #064e3b; }
+        .bg-red-900 { background-color: #7f1d1d; }
+        .bg-yellow-900 { background-color: #713f12; }
+        .bg-green-600 { background-color: #059669; }
+        .bg-red-600 { background-color: #dc2626; }
+        .bg-yellow-600 { background-color: #d97706; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Configuración de la API
+        const API_BASE_URL = ''; // Usar mismo origen: relative fetch a /api
+
+        // Componente principal de la aplicación
+        const TradingAnalyzerApp = () => {
+            const [image, setImage] = useState(null);
+            const [analysisResult, setAnalysisResult] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+            const [history, setHistory] = useState([]);
+            const [showHistory, setShowHistory] = useState(false);
+            const [error, setError] = useState(null);
+            const [simulateMode, setSimulateMode] = useState(false);
+
+            // Función real para analizar imagen con OpenAI
+            const analyzeImageWithAI = async (imageFile) => {
+                setIsLoading(true);
+                setError(null);
+
+                try {
+                    // Modo simulación si backend no disponible
+                    if (simulateMode) {
+                        await new Promise(r => setTimeout(r, 800));
+                        const mock = {
+                            recommendation: Math.random() > 0.5 ? 'SUBIR' : 'BAJAR',
+                            confidence: Number((0.6 + Math.random() * 0.35).toFixed(2)),
+                            explanation: 'Resultado simulado: tendencia estimada basada en patrones comunes.',
+                            patterns: ['EMA crossover', 'RSI'],
+                            timeframe: 'No detectado'
+                        };
+                        const rec = (mock.recommendation || '').toString().toUpperCase();
+                        const conf = isNaN(Number(mock.confidence)) ? null : Number(mock.confidence);
+                        return {
+                            recommendation: rec,
+                            color: rec === 'SUBIR' ? 'green' : rec === 'BAJAR' ? 'red' : 'yellow',
+                            explanation: mock.explanation || 'Sin explicación',
+                            confidence: conf,
+                            patterns: Array.isArray(mock.patterns) ? mock.patterns : [],
+                            timeframe: mock.timeframe || 'No detectado'
+                        };
+                    }
+
+                    const formData = new FormData();
+                    formData.append('image', imageFile);
+
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 15000);
+
+                    const response = await fetch(`${API_BASE_URL}/api/analyze`, {
+                        method: 'POST',
+                        body: formData,
+                        signal: controller.signal
+                    }).finally(() => clearTimeout(timeout));
+
+                    if (!response.ok) {
+                        // Intentar parsear JSON; si falla, usar texto
+                        const raw = await response.text();
+                        try {
+                            const errJson = JSON.parse(raw);
+                            throw new Error(errJson.error || errJson.message || 'Error en el servidor');
+                        } catch {
+                            throw new Error(raw || 'Error en el servidor');
+                        }
+                    }
+
+                    const raw = await response.text();
+                    let result;
+                    try {
+                        result = JSON.parse(raw);
+                    } catch {
+                        throw new Error('Respuesta inválida del servidor');
+                    }
+
+                    const rec = (result.recommendation || '').toString().toUpperCase().trim();
+                    const conf = isNaN(Number(result.confidence)) ? null : Number(result.confidence);
+                    return {
+                        recommendation: rec || 'NEUTRAL',
+                        color: rec === 'SUBIR' ? 'green' : rec === 'BAJAR' ? 'red' : 'yellow',
+                        explanation: result.explanation || 'Sin explicación',
+                        confidence: conf,
+                        patterns: Array.isArray(result.patterns) ? result.patterns : [],
+                        timeframe: result.timeframe || 'No detectado'
+                    };
+                } catch (err) {
+                    console.error('Error en análisis:', err);
+                    setError(err.message || 'Error al analizar la imagen');
+                    return null;
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleImageUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                // Validaciones
+                const allowed = ['image/png', 'image/jpeg'];
+                if (!allowed.includes(file.type)) {
+                    setError('Formato no soportado. Solo PNG o JPG.');
+                    return;
+                }
+                const maxSize = 5 * 1024 * 1024; // 5MB
+                if (file.size > maxSize) {
+                    setError('El archivo excede 5MB.');
+                    return;
+                }
+
+                setError(null);
+                setAnalysisResult(null);
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    setImage(e.target.result);
+                    analyzeImage(file, e.target.result);
+                };
+                reader.onerror = () => {
+                    setError('No se pudo leer el archivo.');
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const analyzeImage = async (imageFile, imageData) => {
+                const result = await analyzeImageWithAI(imageFile);
+                
+                if (result) {
+                    setAnalysisResult(result);
+                    
+                    // Guardar en el historial
+                    const newAnalysis = {
+                        id: Date.now(),
+                        timestamp: new Date().toLocaleString(),
+                        result: result,
+                        image: imageData // Guardar miniatura
+                    };
+                    setHistory(prev => [newAnalysis, ...prev.slice(0, 9)]);
+                }
+            };
+
+            const resetAnalysis = () => {
+                setImage(null);
+                setAnalysisResult(null);
+                setError(null);
+            };
+
+            // Verificar conexión con el backend al cargar
+            useEffect(() => {
+                const checkBackend = async () => {
+                    try {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 5000);
+                        const response = await fetch(`${API_BASE_URL}/api/health`, { signal: controller.signal });
+                        clearTimeout(timeout);
+                        if (!response.ok) {
+                            setSimulateMode(true);
+                            console.warn('Backend no disponible (status). Activando modo simulación.');
+                        }
+                    } catch (err) {
+                        setSimulateMode(true);
+                        console.warn('Backend no disponible. Activando modo simulación.', err?.message);
+                    }
+                };
+                checkBackend();
+            }, []);
+
+            return (
+                <div className="container mx-auto px-4 py-8 max-w-3xl">
+                    <header className="text-center mb-12">
+                        <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent">
+                            Análisis de Trading con IA
+                        </h1>
+                        <p className="text-gray-400">Sube una captura de pantalla de tu gráfico para obtener un análisis con OpenAI</p>
+                        
+                        {error && (
+                            <div className="mt-4 p-3 bg-red-900 border border-red-700 rounded-lg">
+                                <i className="fas fa-triangle-exclamation mr-2"></i>
+                                {error}
+                            </div>
+                        )}
+                    </header>
+
+                    <main className="bg-gray-800 rounded-xl shadow-2xl p-6 mb-8">
+                        {!image ? (
+                            <ImageUploader onImageUpload={handleImageUpload} />
+                        ) : (
+                            <AnalysisArea 
+                                image={image} 
+                                result={analysisResult} 
+                                isLoading={isLoading}
+                                onReset={resetAnalysis}
+                                error={error}
+                            />
+                        )}
+                    </main>
+
+                    <div className="flex justify-between items-center mb-4">
+                        <button 
+                            onClick={() => setShowHistory(!showHistory)}
+                            className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
+                        >
+                            {showHistory ? 'Ocultar Historial' : 'Ver Historial'} ({history.length})
+                        </button>
+                        
+                        <button 
+                            onClick={() => setHistory([])}
+                            disabled={history.length === 0}
+                            className="bg-red-700 hover:bg-red-600 disabled:bg-gray-700 px-4 py-2 rounded-lg transition-colors disabled:cursor-not-allowed"
+                        >
+                            Limpiar Historial
+                        </button>
+                    </div>
+
+                    {showHistory && <HistoryPanel history={history} />}
+
+                    <footer className="mt-12 text-center text-gray-500 text-sm">
+                        <p className="bg-gray-800 p-4 rounded-lg">
+                            <strong>Descargo de responsabilidad:</strong> Este análisis es generado por IA con fines informativos y no garantiza resultados financieros. Use bajo su propio riesgo.
+                        </p>
+                    </footer>
+                </div>
+            );
+        };
+
+        // Componente para subir imágenes (igual que antes)
+        const ImageUploader = ({ onImageUpload }) => {
+            return (
+                <div className="text-center p-8 border-2 border-dashed border-gray-600 rounded-xl hover:border-blue-500 transition-colors">
+                    <div className="mb-4 text-6xl text-gray-400">
+                        <i className="fas fa-chart-line"></i>
+                    </div>
+                    <h2 className="text-2xl font-semibold mb-2">Sube tu captura de pantalla</h2>
+                    <p className="text-gray-400 mb-6">Formatos soportados: PNG, JPG (máx. 5MB)</p>
+                    
+                    <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg inline-block transition-colors">
+                        <i className="fas fa-upload mr-2"></i>Seleccionar archivo
+                        <input 
+                            type="file" 
+                            className="hidden" 
+                            accept="image/png, image/jpeg" 
+                            onChange={onImageUpload}
+                        />
+                    </label>
+                </div>
+            );
+        };
+
+        // Componente para mostrar el análisis (actualizado)
+        const AnalysisArea = ({ image, result, isLoading, onReset, error }) => {
+            return (
+                <div className="fade-in">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-2xl font-semibold">Análisis del gráfico</h2>
+                        <button 
+                            onClick={onReset}
+                            className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
+                        >
+                            <i className="fas fa-rotate-right mr-2"></i>Analizar otra imagen
+                        </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div className="bg-gray-900 p-4 rounded-lg">
+                            <h3 className="text-lg font-medium mb-2">Gráfico subido</h3>
+                            <img src={image} alt="Gráfico de trading" className="w-full rounded-lg max-h-64 object-contain" />
+                        </div>
+                        
+                        <div className="bg-gray-900 p-4 rounded-lg">
+                            <h3 className="text-lg font-medium mb-2">Resultado del análisis</h3>
+                            
+                            {isLoading ? (
+                                <div className="flex flex-col items-center justify-center h-64">
+                                    <div className="pulse text-4xl mb-4">
+                                        <i className="fas fa-chart-bar"></i>
+                                    </div>
+                                    <p className="text-lg">Analizando con OpenAI Vision API...</p>
+                                    <div className="w-full bg-gray-700 rounded-full h-2.5 mt-4">
+                                        <div className="bg-blue-600 h-2.5 rounded-full animate-pulse" style={{width: '45%'}}></div>
+                                    </div>
+                                </div>
+                            ) : error ? (
+                                <div className="text-center h-64 flex flex-col justify-center items-center">
+                                    <i className="fas fa-triangle-exclamation text-4xl text-red-500 mb-4"></i>
+                                    <p className="text-red-400">{error}</p>
+                                    <button 
+                                        onClick={onReset}
+                                        className="mt-4 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg"
+                                    >
+                                        Reintentar
+                                    </button>
+                                </div>
+                            ) : result ? (
+                                <div className="h-64 flex flex-col justify-center">
+                                    <div className={`text-5xl font-bold mb-4 p-4 rounded-lg text-center bg-${result.color}-900`}>
+                                        {result.recommendation}
+                                        {result.confidence && (
+                                            <div className="text-sm mt-2 opacity-80">
+                                                Confianza: {(result.confidence * 100).toFixed(1)}%
+                                            </div>
+                                        )}
+                                    </div>
+                                    <p className="text-lg mb-2">{result.explanation}</p>
+                                    {result.patterns && result.patterns.length > 0 && (
+                                        <div className="text-sm text-gray-400">
+                                            <strong>Patrones detectados:</strong> {result.patterns.join(', ')}
+                                        </div>
+                                    )}
+                                    <div className="text-sm text-gray-400">
+                                        <strong>Timeframe:</strong> {result.timeframe}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Componente para mostrar el historial (actualizado)
+        const HistoryPanel = ({ history }) => {
+            if (history.length === 0) {
+                return (
+                    <div className="bg-gray-800 rounded-xl p-6 text-center">
+                        <p className="text-gray-400">No hay análisis en el historial.</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-gray-800 rounded-xl p-6 fade-in">
+                    <h3 className="text-xl font-semibold mb-4">Historial de análisis</h3>
+                    <div className="space-y-4">
+                        {history.map(item => (
+                            <div key={item.id} className="bg-gray-700 p-4 rounded-lg">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="text-gray-400 text-sm">{item.timestamp}</span>
+                                    <div className={`px-3 py-1 rounded-full text-white bg-${item.result.color}-600`}>
+                                        {item.result.recommendation}
+                                        {item.result.confidence && (
+                                            <span className="text-xs ml-2">({(item.result.confidence * 100).toFixed(0)}%)</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="flex gap-4">
+                                    <img src={item.image} alt="Miniatura" className="w-20 h-20 object-cover rounded" />
+                                    <div>
+                                        <p className="text-gray-300">{item.result.explanation}</p>
+                                        {item.result.patterns && item.result.patterns.length > 0 && (
+                                            <div className="text-sm text-gray-400 mt-1">
+                                                Patrones: {item.result.patterns.join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // Renderizar la aplicación
+        ReactDOM.render(<TradingAnalyzerApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
