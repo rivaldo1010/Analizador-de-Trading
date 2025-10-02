@@ -80,7 +80,8 @@
                     const response = await fetch(`${API_BASE_URL}/api/analyze`, {
                         method: 'POST',
                         body: formData,
-                        signal: controller.signal
+                        signal: controller.signal,
+                        credentials: 'omit'
                     }).finally(() => clearTimeout(timeout));
 
                     if (!response.ok) {
@@ -126,9 +127,9 @@
                 if (!file) return;
 
                 // Validaciones
-                const allowed = ['image/png', 'image/jpeg'];
+                const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
                 if (!allowed.includes(file.type)) {
-                    setError('Formato no soportado. Solo PNG o JPG.');
+                    setError('Formato no soportado. Solo PNG, JPG o WEBP.');
                     return;
                 }
                 const maxSize = 5 * 1024 * 1024; // 5MB
@@ -260,14 +261,14 @@
                         <i className="fas fa-chart-line"></i>
                     </div>
                     <h2 className="text-2xl font-semibold mb-2">Sube tu captura de pantalla</h2>
-                    <p className="text-gray-400 mb-6">Formatos soportados: PNG, JPG (máx. 5MB)</p>
+                    <p className="text-gray-400 mb-6">Formatos soportados: PNG, JPG, WEBP (máx. 5MB)</p>
                     
                     <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg inline-block transition-colors">
                         <i className="fas fa-upload mr-2"></i>Seleccionar archivo
-                        <input 
-                            type="file" 
-                            className="hidden" 
-                            accept="image/png, image/jpeg" 
+                        <input
+                            type="file"
+                            className="hidden"
+                            accept="image/png, image/jpeg, image/jpg, image/webp"
                             onChange={onImageUpload}
                         />
                     </label>

@@ -21,26 +21,28 @@ app.use(express.static('public'));
 
 // Configuración de multer para subida de archivos
 const storage = multer.memoryStorage();
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   limits: {
     fileSize: 5 * 1024 * 1024 // 5MB límite
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Solo se permiten imágenes'));
+      cb(new Error('Solo se permiten imágenes JPG, PNG o WEBP'));
     }
   }
 });
 
 // Función para analizar imagen con OpenAI
-async function analyzeImageWithOpenAI(imageBuffer) {
+async function analyzeImageWithOpenAI(imageBuffer, mimeType) {
   try {
-    // Convertir imagen a base64
     const base64Image = imageBuffer.toString('base64');
-    
+
+    const imageUrl = `data:${mimeType};base64,${base64Image}`;
+
     const response = await axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
@@ -51,50 +53,78 @@ async function analyzeImageWithOpenAI(imageBuffer) {
             content: [
               {
                 type: "text",
-                text: `Analiza este gráfico de trading y determina la tendencia. 
-                Busca patrones de velas japonesas, tendencias alcistas/bajistas, niveles de soporte/resistencia.
-                
-                Responde ÚNICAMENTE con un JSON en este formato exacto:
-                {
-                  "recommendation": "SUBIR|BAJAR|NEUTRAL",
-                  "confidence": 0.85,
-                  "explanation": "Explicación detallada basada en los patrones detectados",
-                  "patterns": ["patrón1", "patrón2"],
-                  "timeframe": " timeframe detectado"
-                }`
+                text: `Analiza este gráfico de trading y determina la tendencia.
+Busca patrones de velas japonesas, tendencias alcistas/bajistas, niveles de soporte/resistencia, volumen, indicadores técnicos (RSI, MACD, EMA, SMA).
+
+Responde ÚNICAMENTE con un JSON válido en este formato exacto (sin texto adicional):
+{
+  "recommendation": "SUBIR" o "BAJAR" o "NEUTRAL",
+  "confidence": 0.85,
+  "explanation": "Explicación detallada de máximo 200 caracteres",
+  "patterns": ["patrón1", "patrón2"],
+  "timeframe": "timeframe detectado (1m, 5m, 1h, 4h, 1d, etc.)"
+}`
               },
               {
                 type: "image_url",
                 image_url: {
-                  url: `data:image/jpeg;base64,${base64Image}`
+                  url: imageUrl
                 }
               }
             ]
           }
         ],
-        max_tokens: 1000
+        max_tokens: 800,
+        temperature: 0.5
       },
       {
         headers: {
           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 30000
       }
     );
 
-    // Extraer y parsear el JSON de la respuesta
-    const content = response.data.choices[0].message.content;
+    const content = response.data.choices[0].message.content.trim();
+
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    } else {
-      throw new Error('No se pudo parsear la respuesta de OpenAI');
+
+    if (!jsonMatch) {
+      console.error('Respuesta de OpenAI sin JSON:', content);
+      throw new Error('La respuesta de OpenAI no contiene un JSON válido');
     }
-    
+
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    if (!parsed.recommendation || !['SUBIR', 'BAJAR', 'NEUTRAL'].includes(parsed.recommendation.toUpperCase())) {
+      throw new Error('Formato de recomendación inválido');
+    }
+
+    return {
+      recommendation: parsed.recommendation.toUpperCase(),
+      confidence: parseFloat(parsed.confidence) || 0.5,
+      explanation: parsed.explanation || 'Sin explicación',
+      patterns: Array.isArray(parsed.patterns) ? parsed.patterns : [],
+      timeframe: parsed.timeframe || 'No detectado'
+    };
+
   } catch (error) {
-    console.error('Error con OpenAI API:', error.response?.data || error.message);
-    throw new Error('Error al analizar la imagen');
+    if (error.response) {
+      console.error('Error OpenAI API:', error.response.status, error.response.data);
+      if (error.response.status === 401) {
+        throw new Error('API key de OpenAI inválida o no configurada');
+      } else if (error.response.status === 429) {
+        throw new Error('Límite de API excedido. Intenta nuevamente en unos minutos');
+      } else if (error.response.status === 400) {
+        throw new Error('Imagen no válida o demasiado grande');
+      }
+      throw new Error(`Error de OpenAI: ${error.response.data?.error?.message || 'Error desconocido'}`);
+    } else if (error.code === 'ECONNABORTED') {
+      throw new Error('Timeout: La petición tardó demasiado');
+    }
+    console.error('Error al analizar:', error.message);
+    throw error;
   }
 }
 
@@ -117,7 +147,7 @@ app.post('/api/analyze', (req, res) => {
         return res.status(500).json({ error: 'API key no configurada' });
       }
 
-      const analysisResult = await analyzeImageWithOpenAI(req.file.buffer);
+      const analysisResult = await analyzeImageWithOpenAI(req.file.buffer, req.file.mimetype);
 
       return res.json({
         success: true,
